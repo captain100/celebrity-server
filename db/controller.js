@@ -1,8 +1,10 @@
 // 名片小程序后台逻辑
 import Card from './cardmodel.js'
 import UserModel from './usermodel.js'
+import memorystore from './memoryStore.js'
 import config from '../config.js'
 import fetch from 'node-fetch'
+import crypto from 'crypto'
 import WXBizDataCrypt from '../utils/WXBizDataCrypt.js'
 import Promise from 'Promise'
 
@@ -19,7 +21,6 @@ let response = {
  * @return {[type]}     []
  */
 exports.findOneCard = (req, res) => {
-    console.log('req session ', req.session.user)
     const cardId = req.query.cardId
     return Card.findById(cardId).then(success => {
         Object.assign(response, { body: success })
@@ -59,11 +60,7 @@ exports.eidtCard = (req, res) => {
 exports.wxlogin = (req, res) => {
     const code = req.body.code
     const wxUserInfo = JSON.parse(req.body.wxUserInfo)
-    console.log('wxlogin', req.sessionID)
-    if (req.session.user) {
-        Object.assign(response, { body: req.session.user })
-        return res.json(response)
-    }
+    let accesstoken = ''
     /**
      * [请求微信服务]
      */
@@ -78,10 +75,12 @@ exports.wxlogin = (req, res) => {
             console.log('签名解密微信用户信息')
             const pc = new WXBizDataCrypt(config.AppID, data.session_key)
             const userInfo = pc.decryptData(wxUserInfo.encryptedData, wxUserInfo.iv)
-            return Object.assign({}, { openId: data.openid }, userInfo)
+            accesstoken = crypto.createHmac('md5', 'secret').update(data.openid + data.session_key).digest('hex')
+            memorystore.addOrUpdate(accesstoken, userInfo)
+            return [Object.assign({}, { openId: data.openid }, userInfo), accesstoken]
         })
         // 用户
-        .then(userInfo => {
+        .then(([userInfo, accesstoken]) => {
             if (userInfo) {
                 return findOrSave(userInfo)
             }
@@ -89,8 +88,7 @@ exports.wxlogin = (req, res) => {
         })
         .then(userInfo => {
             console.log('登陆成功写入session', userInfo)
-            req.session.user = userInfo
-            Object.assign(response, { body: userInfo })
+            Object.assign(response, { body: userInfo, accesstoken })
             return res.json(response)
         }, err => {
             console.log('登陆失败', err)
@@ -99,6 +97,7 @@ exports.wxlogin = (req, res) => {
         })
 
 }
+
 /**
  * [findOrSave 查找用户信息如果对应的openid 则返回对应的用户信息 如果没有则新插入用户信息]
  * @param  {[type]} userInfo [description]
